@@ -1,0 +1,11 @@
+{
+  "name": "momentum-daily-background",
+  "version": "1.0.0",
+  "description": "Fetch today's Momentum Dashboard background image at original quality",
+  "main": "fetch-daily.js",
+  "scripts": {
+    "fetch": "node fetch-daily.js"
+  },
+  "keywords": ["momentum", "background", "daily", "wallpaper"],
+  "license": "MIT"
+}
