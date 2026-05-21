@@ -6,6 +6,11 @@
   "scripts": {
     "fetch": "node fetch-daily.js"
   },
-  "keywords": ["momentum", "background", "daily", "wallpaper"],
+  "keywords": [
+    "momentum",
+    "background",
+    "daily",
+    "wallpaper"
+  ],
   "license": "MIT"
 }
