@@ -13,11 +13,12 @@ function main() {
   const dateStr = new Date().toISOString().split('T')[0];
 
   // Method 1: Extract from Chrome service worker cache (real daily image)
-  const cachedPath = extractLatestCachedBg(outputDir, dateStr);
-  if (cachedPath) {
+  const cached = extractLatestCachedBg(outputDir, dateStr);
+  if (cached) {
     console.log('Source: Chrome Service Worker cache (Momentum API)');
-    console.log('Image saved:', cachedPath);
-    const stats = fs.statSync(cachedPath);
+    console.log('Image saved:', cached.path);
+    console.log('Image URL:', cached.url || '(not found)');
+    const stats = fs.statSync(cached.path);
     console.log('File size:', (stats.size / 1024 / 1024).toFixed(2), 'MB');
     return;
   }
@@ -71,7 +72,7 @@ function extractLatestCachedBg(outputDir, dateStr) {
 
   if (!newestJpeg) return null;
 
-  // Extract JPEG data from the cache file
+  // Extract JPEG data and image URL from the cache file
   const buf = fs.readFileSync(newestJpeg.path);
   let jpegStart = -1;
   for (let i = 0; i < Math.min(2000, buf.length - 2); i++) {
@@ -83,13 +84,20 @@ function extractLatestCachedBg(outputDir, dateStr) {
 
   if (jpegStart < 0) return null;
 
+  // Extract image URL from cache file text
+  const text = buf.toString('utf-8');
+  const urlMatch = text.match(/https:\/\/momentum\.photos\/img\/[a-f0-9-]+\.jpg/i)
+    || text.match(/https:\/\/images\.unsplash\.com\/[^\x00\x01-\x1f\s"<>]+/i)
+    || text.match(/https:\/\/farm\d+\.staticflickr\.com\/[^\x00\x01-\x1f\s"<>]+\.jpg/i);
+  const imageUrl = urlMatch ? urlMatch[0].replace(/[P\s]+$/, '') : null;
+
   const jpegData = buf.slice(jpegStart);
   const filename = `${dateStr}-daily.jpg`;
   const destPath = path.join(outputDir, filename);
   fs.writeFileSync(destPath, jpegData);
 
   console.log('Cache date:', newestJpeg.mtime.toISOString().split('T')[0]);
-  return destPath;
+  return { path: destPath, url: imageUrl };
 }
 
 // Fall back to local 24-image daily rotation
