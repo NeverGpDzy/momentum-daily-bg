@@ -1,214 +1,156 @@
-const https = require('https');
-
 // ============================================================
-// Momentum Daily Background — 阿里云 ESA / Serverless Function
+// Momentum Daily Background — 阿里云 ESA EdgeRoutine
 //
-// 环境变量（在阿里云 ESA 控制台配置）：
-//   MOMENTUM_TOKEN  — Momentum 登录 token（必需，用于调用 API 获取每日图片）
-//
-// 如果不配置 token，会使用本地缓存中的最近一张图片 URL 作为降级方案。
+// EdgeRoutine 使用 Web API（fetch / Request / Response），不是 Node.js
+// 入口：export default { async fetch(request) { ... } }
 // ============================================================
 
+const MOMENTUM_TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE4MTA5MTkzODMuMCwibmJmIjoxNzc5MzgzMDgzLjAsImlzcyI6ImxvZ2luLWFwaS12MyIsInVzZXJfaWQiOjE2NjYzNjM1LCJ1c2VyX2d1aWQiOiI2MDcyOWJiNS1jNzAwLTRiZWUtYTM5ZS1mYTc3ZjZmOGUzMDQiLCJjb3Ntb3NfZGJfY29sbGVjdGlvbiI6InVzZXJkYXRhLWFsbCJ9.rxFLPzlbhNCYY1N5JaqDx2BshxxEuCvQ_p2gTugfEI4';
 const FALLBACK_URL = 'https://momentum.photos/img/3596af9e-4d1f-492d-a95e-2e8ddc0e3af5.jpg';
 
-function httpsGet(url, headers = {}) {
-  return new Promise((resolve, reject) => {
-    const mod = url.startsWith('https') ? https : require('http');
-    const urlObj = new URL(url);
-    const options = {
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        ...headers,
-      },
-    };
-    const req = mod.request(options, (res) => {
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () =>
-        resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) })
-      );
-    });
-    req.on('error', reject);
-    req.setTimeout(15000, () => {
-      req.destroy();
-      reject(new Error('timeout'));
-    });
-    req.end();
-  });
-}
+// 用 token 调 API 获取今日背景数据
+async function fetchDailyPhoto(token) {
+  const today = new Date().toISOString().split('T')[0];
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'X-Momentum-Version': '2.26.6',
+    'Accept': 'application/json',
+  };
 
-function httpsPost(url, headers = {}, body = null) {
-  return new Promise((resolve, reject) => {
-    const urlObj = new URL(url);
-    const options = {
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      method: 'POST',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-    };
-    const req = https.request(options, (res) => {
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () =>
-        resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) })
-      );
-    });
-    req.on('error', reject);
-    req.setTimeout(15000, () => {
-      req.destroy();
-      reject(new Error('timeout'));
-    });
-    if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
-    req.end();
-  });
-}
+  let bg = null;
 
-// 尝试从 Momentum API 获取今日图片 URL
-async function fetchDailyPhotoUrl(token) {
+  // 方式1: GET /feed/bulk
   try {
-    const res = await httpsPost('https://api.momentumdash.com/backgrounds', {
-      'X-Momentum-Version': '2.26.6',
-      'X-Momentum-ClientDate': new Date().toISOString().split('T')[0],
-      'Authorization': `Bearer ${token}`,
-    });
-
-    if (res.status === 200) {
-      const data = JSON.parse(res.body.toString('utf-8'));
-      // API 返回的数据中查找图片 URL
-      const photo = findPhotoUrl(data);
-      if (photo) return photo;
+    const res = await fetch(
+      `https://api.momentumdash.com/feed/bulk?syncTypes=background&localDate=${today}`,
+      { headers }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data.backgrounds && data.backgrounds.length > 0) bg = data.backgrounds[0];
     }
-  } catch (e) {
-    console.error('API fetch failed:', e.message);
-  }
-  return null;
-}
+  } catch (e) {}
 
-// 递归查找 JSON 中的图片 URL
-function findPhotoUrl(obj) {
-  if (!obj || typeof obj !== 'object') return null;
-  for (const [key, val] of Object.entries(obj)) {
-    if (typeof val === 'string') {
-      if (
-        val.includes('momentum.photos/img/') ||
-        val.includes('modash.blob.core.windows.net') ||
-        (val.includes('unsplash.com') && val.includes('photo'))
-      ) {
-        return val;
+  // 方式2: GET /backgrounds/history
+  if (!bg) {
+    try {
+      const res = await fetch('https://api.momentumdash.com/backgrounds/history', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.history && data.history.length > 0) bg = data.history[0];
       }
-    }
-    if (typeof val === 'object' && val !== null) {
-      const found = findPhotoUrl(val);
-      if (found) return found;
-    }
+    } catch (e) {}
   }
-  return null;
+
+  if (!bg) return null;
+
+  const uuid = bg._id || bg.id;
+  const info = {
+    title: bg.title || '',
+    source: bg.source || bg.attribution || '',
+    sourceUrl: bg.sourceUrl || '',
+    uuid,
+    isBuiltIn: !!bg.isBuiltIn,
+  };
+
+  // 云端图片：filename 就是公开 URL（Unsplash / Azure Blob 等）
+  if (bg.filename && bg.filename.startsWith('http')) {
+    return { url: bg.filename, ...info };
+  }
+
+  // 内置图片：尝试 momentum.photos CDN
+  const candidates = [
+    `https://momentum.photos/img/${uuid}.jpg`,
+    `https://momentum.photos/images/${uuid}.jpg`,
+    `https://momentum.photos/backgrounds/${uuid}.jpg`,
+  ];
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { method: 'HEAD' });
+      if (res.ok) return { url, ...info };
+    } catch (e) {}
+  }
+
+  // CDN 上也没有，返回 fallback
+  return { url: FALLBACK_URL, ...info, fallback: true };
 }
 
-// 生成 HTML 页面
-function buildHtml(imageUrl, source) {
+function buildHtml(imageUrl, info) {
+  const title = info.title || 'Momentum Daily Background';
+  const credit = info.source ? `Photo by ${info.source}` : '';
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Momentum Daily Background</title>
+  <title>${title}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-    img {
-      width: 100%; height: 100%;
-      object-fit: cover;
-      display: block;
-    }
+    img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .info {
-      position: fixed; bottom: 20px; right: 20px;
+      position: fixed; bottom: 20px; left: 20px;
       background: rgba(0,0,0,0.5); color: #fff;
-      padding: 8px 16px; border-radius: 8px;
-      font-family: -apple-system, sans-serif; font-size: 13px;
-      backdrop-filter: blur(8px);
+      padding: 12px 20px; border-radius: 10px;
+      font-family: -apple-system, sans-serif; font-size: 14px;
+      backdrop-filter: blur(8px); max-width: 400px;
     }
-    .info a { color: #8cf; text-decoration: none; }
+    .info .title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+    .info .credit { opacity: 0.8; font-size: 12px; }
   </style>
 </head>
 <body>
-  <img src="${imageUrl}" alt="Momentum Daily Background" />
-  <div class="info">Source: ${source}</div>
+  <img src="${imageUrl}" alt="${title}" />
+  <div class="info">
+    <div class="title">${title}</div>
+    ${credit ? `<div class="credit">${credit}</div>` : ''}
+  </div>
 </body>
 </html>`;
 }
 
-// 主处理函数（阿里云 ESA / Serverless 入口）
-module.exports.handler = async (req, res) => {
-  const token = process.env.MOMENTUM_TOKEN;
-  let imageUrl = FALLBACK_URL;
-  let source = 'fallback';
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    const format = url.searchParams.get('format');
 
-  if (token) {
-    const apiPhoto = await fetchDailyPhotoUrl(token);
-    if (apiPhoto) {
-      imageUrl = apiPhoto;
-      source = 'momentum-api';
+    const photo = await fetchDailyPhoto(MOMENTUM_TOKEN);
+    const imageUrl = photo ? photo.url : FALLBACK_URL;
+    const info = photo || { title: 'Fallback', source: '' };
+
+    // ?format=image → 代理返回图片二进制
+    if (format === 'image') {
+      try {
+        const imgRes = await fetch(imageUrl);
+        if (imgRes.ok) {
+          const headers = new Headers(imgRes.headers);
+          headers.set('Cache-Control', 'public, max-age=86400');
+          headers.set('Access-Control-Allow-Origin', '*');
+          return new Response(imgRes.body, { status: 200, headers });
+        }
+        return new Response('Image not available', { status: imgRes.status });
+      } catch (e) {
+        return new Response('Failed to fetch image', { status: 502 });
+      }
     }
-  }
 
-  // 直接代理图片（返回图片二进制）
-  if (req.query && req.query.format === 'image') {
-    try {
-      const img = await httpsGet(imageUrl);
-      res.setHeader('Content-Type', img.headers['content-type'] || 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.send(img.body);
-    } catch (e) {
-      res.status(502).send('Failed to fetch image');
+    // ?format=json → 返回 JSON
+    if (format === 'json') {
+      const jsonOut = photo ? { ...photo } : { error: 'not found' };
+      if (photo && photo.fallback) jsonOut.note = 'Built-in image not available on CDN, using fallback';
+      return new Response(JSON.stringify(jsonOut), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
-    return;
-  }
 
-  // 返回 HTML 页面
-  const html = buildHtml(imageUrl, source);
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Cache-Control', 'public, max-age=3600');
-  res.send(html);
+    // 默认 → 返回 HTML 页面
+    const html = buildHtml(imageUrl, info);
+    return new Response(html, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
+  },
 };
-
-// 本地测试
-if (require.main === module) {
-  const http = require('http');
-  const url = require('url');
-  const server = http.createServer(async (req, res) => {
-    const parsed = url.parse(req.url, true);
-    const fakeReq = { query: parsed.query };
-    const fakeRes = {
-      _headers: {},
-      setHeader(k, v) {
-        this._headers[k] = v;
-      },
-      status(code) {
-        this._statusCode = code;
-        return this;
-      },
-      send(body) {
-        res.writeHead(this._statusCode || 200, this._headers);
-        res.end(body);
-      },
-    };
-    fakeRes.status = (code) => {
-      fakeRes._statusCode = code;
-      return fakeRes;
-    };
-    await module.exports.handler(fakeReq, fakeRes);
-  });
-  server.listen(3000, () => {
-    console.log('Local test server: http://localhost:3000');
-    console.log('Image proxy:      http://localhost:3000?format=image');
-  });
-}
