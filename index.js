@@ -135,6 +135,17 @@ export default {
       }
     }
 
+    // ?format=url → 返回纯文本图片链接
+    if (format === 'url') {
+      return new Response(imageUrl, {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600',
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
+    }
+
     // ?format=json → 返回 JSON
     if (format === 'json') {
       const jsonOut = photo ? { ...photo } : { error: 'not found' };
